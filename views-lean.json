@@ -1,0 +1,50 @@
+[
+  {
+    "id": "summary",
+    "name": "Overview",
+    "elements": [
+      {
+        "type": "custom_vis",
+        "size": 3,
+        "props": {
+          "visname": "dayline",
+          "title": "时间带"
+        }
+      },
+      {
+        "type": "score",
+        "size": 3
+      },
+      {
+        "type": "custom_vis",
+        "size": 3,
+        "props": {
+          "visname": "rollup",
+          "title": "Time by Category"
+        }
+      },
+      {
+        "type": "top_apps",
+        "size": 3
+      },
+      {
+        "type": "top_domains",
+        "size": 3
+      }
+    ]
+  },
+  {
+    "id": "browser",
+    "name": "Web",
+    "elements": [
+      {
+        "type": "top_domains",
+        "size": 3
+      },
+      {
+        "type": "top_urls",
+        "size": 3
+      }
+    ]
+  }
+]

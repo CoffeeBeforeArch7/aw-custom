@@ -1,0 +1,837 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>Day Timeline</title>
+<style>
+  :root {
+    --text: #1f2329;
+    --muted: #828b99;
+    --border: #e6e8ec;
+    --track: rgba(120, 130, 150, 0.07);
+    --grid: rgba(120, 130, 150, 0.16);
+    --afk: #edf0f3;   /* 发呆：在电脑前但没输入 —— 最浅，它最接近「没发生」 */
+    --away: #b6bec9;  /* 连续 20min+ 没输入，基本等于人不在（只画一条底线） */
+    --other: #c4cbd5; /* 其它活动：沟通/中性/未分类 —— 比发呆深一档，但要明显弱于分类色 */
+    --sel: rgba(59, 130, 246, 0.1);
+    --tipbg: #1f2329;
+    --tipfg: #fff;
+  }
+  /* 主题跟父窗口（AW 自己的 dark.css），不跟系统 —— 系统深色 + AW 浅色时，
+     跟系统会把整条时间带涂成黑的 */
+  :root[data-theme='dark'] {
+    --text: #e9ebf0; --muted: #8a93a3; --border: #262c36;
+    --track: rgba(120, 130, 150, 0.1); --grid: rgba(120, 130, 150, 0.2);
+    --afk: #242a33; --away: #3d4552; --other: #39424e; --sel: rgba(59, 130, 246, 0.16);
+    --tipbg: #e9ebf0; --tipfg: #161b23;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: transparent; color: var(--text);
+    font: 13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  #root { position: relative; }
+
+  #ctl { display: flex; flex-wrap: wrap; align-items: center; gap: 0.3rem 0.6rem; margin-bottom: 0.5rem; color: var(--muted); font-size: 0.8em; }
+  #ctl select { font: inherit; color: var(--text); background: transparent; border: 1px solid var(--border); border-radius: 4px; padding: 0 0.2rem; }
+  #ctl label { cursor: pointer; user-select: none; }
+  #ctl .sp { margin-left: auto; }
+
+  /* 三列：日期 / 时间带 / 当天合计 */
+  .r { display: grid; grid-template-columns: 3.4rem 1fr 3rem; align-items: center; gap: 0.4rem; height: var(--rowh, 24px); }
+  .r + .r { margin-top: 2px; }
+  .r.sel { background: var(--sel); border-radius: 5px; }
+  .r .lbl { font-size: 0.74em; color: var(--muted); text-align: right; cursor: pointer; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .r .lbl:hover { color: var(--text); text-decoration: underline; }
+  .r .lbl b { font-weight: 600; }
+  .r .tot { font-size: 0.72em; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .r .track {
+    position: relative; height: calc(var(--rowh, 24px) - 4px); border-radius: 3px; overflow: hidden;
+    background-color: var(--track);
+    background-image: repeating-linear-gradient(to right, var(--grid) 0 1px, transparent 1px calc(100% / 24));
+  }
+  .r .track svg { display: block; width: 100%; height: 100%; }
+  .r.load .track::after {
+    content: ""; position: absolute; inset: 0;
+    background: linear-gradient(90deg, transparent, rgba(120,130,150,.18), transparent);
+    animation: sh 1.1s linear infinite;
+  }
+  @keyframes sh { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
+
+  /* 小时刻度：和 .track 同一套网格对齐 */
+  #axis { display: grid; grid-template-columns: 3.4rem 1fr 3rem; gap: 0.4rem; margin-bottom: 3px; }
+  #axis .ticks {
+    position: relative; height: 15px;
+    /* 每小时一根短刻度，和 .track 里的网格线同一套坐标 */
+    background-image: repeating-linear-gradient(to right, var(--grid) 0 1px, transparent 1px calc(100% / 24));
+    background-size: 100% 4px; background-position: left bottom; background-repeat: no-repeat;
+  }
+  #axis .ticks span {
+    position: absolute; top: 0; transform: translateX(-50%);
+    font-size: 0.62em; color: var(--muted); font-variant-numeric: tabular-nums;
+  }
+
+  #legend { display: flex; flex-wrap: wrap; gap: 0.1rem 0.7rem; margin-top: 0.55rem; font-size: 0.72em; color: var(--muted); }
+  #legend i {
+    display: inline-block; width: 8px; height: 8px; border-radius: 2px;
+    margin-right: 0.25rem; vertical-align: baseline; box-shadow: inset 0 0 0 1px var(--grid);
+  }
+
+  #note { margin-top: 0.5rem; font-size: 0.78em; line-height: 1.6; }
+  #note .hd { color: var(--text); font-weight: 600; }
+  #note .ok { color: #0f9d58; }
+  #note .bad { color: #d93025; }
+  #note div { color: var(--muted); }
+
+  #tip {
+    position: fixed; z-index: 9; pointer-events: none; display: none;
+    background: var(--tipbg); color: var(--tipfg); border-radius: 6px;
+    padding: 0.3rem 0.5rem; font-size: 0.72em; line-height: 1.4;
+    /* 内容可能比卡片还宽（长应用名），宁可折成两行也别被 iframe 右边裁掉 */
+    max-width: min(30rem, calc(100vw - 10px));
+    box-shadow: 0 4px 14px rgba(0,0,0,.18);
+  }
+  #err { color: #c00; font-size: 0.85em; white-space: pre-wrap; }
+
+  /* 塞进死高度小框（官方界面 custom_vis 是 300x150）时只留时间带 */
+  @media (max-height: 220px) { #ctl, #legend, #note { display: none; } }
+</style>
+
+<div id="root">
+  <div id="ctl">
+    <label>最近
+      <select id="ndays">
+        <option value="7">7 天</option>
+        <option value="14">14 天</option>
+        <option value="30">30 天</option>
+      </select>
+    </label>
+    <label>每格
+      <select id="dbin">
+        <option value="5">5min</option>
+        <option value="15">15min</option>
+        <option value="30">30min</option>
+      </select>
+    </label>
+    <label>配色
+      <select id="mode">
+        <option value="key">重点</option>
+        <option value="all">全部分类</option>
+      </select>
+    </label>
+    <span class="sp" id="prog"></span>
+  </div>
+  <div id="axis"><div></div><div class="ticks"></div><div></div></div>
+  <div id="rows"></div>
+  <div id="legend"></div>
+  <div id="note"></div>
+  <div id="err"></div>
+  <div id="tip"></div>
+</div>
+
+<script>
+  "use strict";
+
+  const BIN = 5;                 // 一格 5 分钟
+  const BINSEC = BIN * 60;
+  const NBIN = 1440 / BIN;       // 288
+  const CACHE_V = 5;
+  const SEP = " > ";
+  const H = 40;                  // svg viewBox 高度（配 preserveAspectRatio=none，纯数值坐标系）
+  // 「产出 / 干扰」不写死分类名 —— 直接用 AW 自带的 score：
+  // Settings → Categorization 里给顶级分类设的分数，>0 算产出，<0 算干扰，0 或没设算中性。
+  // 这样换一台机器、换一套分类体系都不用改代码。
+  const AWAY_SEC = 20 * 60;      // 连续没输入超过这个时长，当成「人不在」而不是「桌前发呆」
+  const CHROME_APPS = ["Google Chrome","Google-chrome","chrome.exe","google-chrome-stable","Chromium",
+    "Chromium-browser","Chromium-browser-chromium","chromium.exe","Google-chrome-beta","Google-chrome-unstable"];
+  const WD = ["日", "一", "二", "三", "四", "五", "六"];
+
+  const p = new URLSearchParams(location.search);
+  // 「重点」配色下保留原色的是「有倾向的」分类（score ≠ 0），中性的一律并成「其它」
+  const OTHER = "其它";
+  const IDLE = "在桌前没动";
+  const MIN_STACK = 0.12;   // 整根柱子的最小可见高度（比例照旧，只是整体放大）
+
+  const st = {
+    host: null, classes: [], rules: "", hash: "", chrome: null,
+    dayH: 4, dayM: 0, days: [], ndays: 7, dbin: 15, mode: "key", selKey: null, busy: 0,
+  };
+
+  const $ = (id) => document.getElementById(id);
+  const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
+
+  function fmt(sec) {
+    let m = Math.round(sec / 60);          // 先进位到分钟再拆，否则 3599s 会输出 "60m"
+    const h = Math.floor(m / 60);
+    m -= h * 60;
+    return h ? h + "h" + (m ? m + "m" : "") : m + "m";
+  }
+
+  async function api(path, body) {
+    const r = await fetch("/api/0" + path, body ? {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+    } : undefined);
+    if (!r.ok) throw new Error(path + " -> " + r.status + " " + (await r.text()).slice(0, 300));
+    return r.json();
+  }
+
+  /* ---------- 日界 / 日期 ---------- */
+
+  // 「学习日」= 从 startOfDay（默认 04:00）算起的 24h。凌晨 2 点算前一天。
+  function dayStartOf(d) {
+    const x = new Date(d);
+    const before = x.getHours() * 60 + x.getMinutes() < st.dayH * 60 + st.dayM;
+    x.setHours(st.dayH, st.dayM, 0, 0);
+    if (before) x.setDate(x.getDate() - 1);
+    return x;
+  }
+  const addDays = (d, n) => { const x = new Date(d); x.setDate(x.getDate() + n); return x; };
+  const keyOf = (d) => d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+
+  // 墙钟分钟数（而不是经过的毫秒），这样夏令时切换当天也不会整体错位
+  function minOfDay(ms) {
+    const d = new Date(ms);
+    let m = d.getHours() * 60 + d.getMinutes() + d.getSeconds() / 60 + d.getMilliseconds() / 60000;
+    m -= st.dayH * 60 + st.dayM;
+    if (m < 0) m += 1440;
+    return m;
+  }
+
+  /* ---------- 分类 ---------- */
+
+  function topOf(catStr) { return catStr.split(SEP)[0]; }
+
+  // classes 是几十条、渲染循环是几十万次，每次 find + join 会明显卡；开局建表
+  let CLS = {};
+  function indexClasses() {
+    CLS = {};
+    st.classes.forEach((c) => { CLS[c.name.join(SEP)] = c.data || {}; });
+    st.hasScores = st.classes.some(
+      (c) => c.name.length === 1 && c.data && typeof c.data.score === "number" && c.data.score !== 0);
+  }
+  const colorMemo = {}, rankMemo = {};
+
+  function colorOf(catStr) {
+    if (catStr in colorMemo) return colorMemo[catStr];
+    const path = catStr.split(SEP);
+    let out = "#CCC";
+    for (let i = path.length; i > 0; i--) {
+      const d = CLS[path.slice(0, i).join(SEP)];
+      if (d && d.color) { out = d.color; break; }
+    }
+    return (colorMemo[catStr] = out);
+  }
+
+  /* ---------- 查询 ---------- */
+
+  // 和 rollup / Overview 用同一条 canonical query，口径必须一致
+  function queryBody() {
+    const chrome = st.chrome ? [
+      'browser_events = [];',
+      'events_chrome = flood(query_bucket("' + st.chrome + '"));',
+      'window_chrome = filter_keyvals(events, "app", ' + JSON.stringify(CHROME_APPS) + ');',
+      'events_chrome = filter_period_intersect(events_chrome, window_chrome);',
+      'events_chrome = split_url_events(events_chrome);',
+      'browser_events = concat(browser_events, events_chrome);',
+      'audible_events = filter_keyvals(browser_events, "audible", [true]);',
+      'not_afk = period_union(not_afk, audible_events);',
+    ] : [];
+    return [
+      'events = flood(query_bucket(find_bucket("aw-watcher-window_' + st.host + '")));',
+      'afk_all = flood(query_bucket(find_bucket("aw-watcher-afk_' + st.host + '")));',
+      'not_afk = filter_keyvals(afk_all, "status", ["not-afk"]);',
+    ].concat(chrome, [
+      'events = filter_period_intersect(events, not_afk);',
+      'events = categorize(events, ' + st.rules + ');',
+      'away = filter_keyvals(afk_all, "status", ["afk"]);',
+      'RETURN = {"events": sort_by_timestamp(events), "away": away};',
+    ]).join("\n");
+  }
+
+  /* ---------- 切 bin ---------- */
+
+  function addSpan(bins, ev, kind) {
+    const s = Date.parse(ev.timestamp);
+    let m0 = minOfDay(s);
+    let m1 = m0 + ev.duration / 60;
+    m0 = clamp(m0, 0, 1440); m1 = clamp(m1, 0, 1440);
+    if (m1 <= m0) return;
+    const cat = kind === "a" ? (ev.data.$category || ["Uncategorized"]).join(SEP) : null;
+    const app = kind === "a" ? (ev.data.app || "?") : null;
+    for (let i = Math.floor(m0 / BIN); i < NBIN && i * BIN < m1; i++) {
+      const ov = (Math.min(m1, (i + 1) * BIN) - Math.max(m0, i * BIN)) * 60;
+      if (ov <= 0) continue;
+      const b = bins[i];
+      if (kind === "w") { b.w += ov; continue; }
+      if (kind === "f") { b.f += ov; continue; }
+      b.a += ov;
+      b.c[cat] = (b.c[cat] || 0) + ov;
+      b.p[app] = (b.p[app] || 0) + ov;
+    }
+  }
+
+  const argmax = (o) => { let k = null, v = -1; for (const x in o) if (o[x] > v) { v = o[x]; k = x; } return k; };
+
+  // → 稀疏 cells：[binIdx, 发呆秒, 人不在秒, [分类下标, 秒, 分类下标, 秒, …], 主要应用下标]
+  //
+  // 分类明细整格存下来，不取 argmax。实测这台机器平均一个 5min 格里有 3.46 个分类
+  // （事件密度 ≈ 10s 一个），只存最大的那个会丢掉 34% 的活跃时间 ——
+  // 图会把碎片化的一天画得比实际整齐，产出/摸鱼/起步这些数字也会跟着错。
+  function binize(res) {
+    const bins = [];
+    for (let i = 0; i < NBIN; i++) bins.push({ a: 0, f: 0, w: 0, c: {}, p: {} });
+    res.events.forEach((e) => addSpan(bins, e, "a"));
+    // AFK watcher 不区分「泡杯咖啡」和「睡觉时机器没关」，按时长自己分。
+    // 注意跨日界：一整夜的 afk 事件会被 04:00 的查询窗切成两截，尾巴那截可能不足 20min，
+    // 照时长判就会被画成「桌前发呆」。贴着窗口边缘的一律按截断处理。
+    (res.away || []).forEach((e) => {
+      const m0 = minOfDay(Date.parse(e.timestamp));
+      const m1 = m0 + e.duration / 60;
+      const edge = m0 <= 0.5 || m1 >= 1439.5;
+      addSpan(bins, e, e.duration >= AWAY_SEC || (edge && e.duration >= 300) ? "w" : "f");
+    });
+
+    const cats = [], apps = [], ci = {}, pi = {}, cells = [];
+    const idx = (tab, map, v) => (v in map ? map[v] : (map[v] = tab.push(v) - 1));
+    for (let i = 0; i < NBIN; i++) {
+      const b = bins[i];
+      const pairs = [];
+      let a = 0;
+      for (const k in b.c) {
+        const sec = Math.round(b.c[k]);
+        if (sec < 1) continue;
+        pairs.push(idx(cats, ci, k), sec);
+        a += sec;
+      }
+      const f = Math.max(0, Math.round(Math.min(b.f, BINSEC - a)));
+      const w = Math.max(0, Math.round(Math.min(b.w, BINSEC - a - f)));
+      if (!pairs.length && f < 1 && w < 1) continue;
+      cells.push([i, f, w, pairs, pairs.length ? idx(apps, pi, argmax(b.p)) : -1]);
+    }
+    return { cat: cats, app: apps, cells: cells };
+  }
+
+  /* ---------- 缓存 ---------- */
+
+  const ckey = (k) => "dayline:" + st.host + ":" + k;
+
+  function readCache(k) {
+    try {
+      const raw = localStorage.getItem(ckey(k));
+      if (!raw) return null;
+      const o = JSON.parse(raw);
+      if (o.v !== CACHE_V || o.h !== st.hash || o.bin !== BIN) return null;
+      return o;
+    } catch (e) { return null; }
+  }
+
+  function writeCache(k, data) {
+    try {
+      localStorage.setItem(ckey(k), JSON.stringify({ v: CACHE_V, h: st.hash, bin: BIN, ...data }));
+    } catch (e) {
+      // 满了就把最老的几天扔掉再试一次
+      try {
+        Object.keys(localStorage).filter((x) => x.startsWith("dayline:")).sort().slice(0, 8)
+          .forEach((x) => localStorage.removeItem(x));
+        localStorage.setItem(ckey(k), JSON.stringify({ v: CACHE_V, h: st.hash, bin: BIN, ...data }));
+      } catch (e2) { /* 放弃缓存，不影响功能 */ }
+    }
+  }
+
+  /* ---------- 取数 ---------- */
+
+  async function fetchDay(day) {
+    const end = new Date(Math.min(addDays(day.start, 1).getTime(), Date.now()));
+    if (end <= day.start) return { cat: [], app: [], cells: [] };
+    const res = (await api("/query/", {
+      timeperiods: [day.start.toISOString() + "/" + end.toISOString()],
+      query: [queryBody()],
+    }))[0];
+    return binize(res);
+  }
+
+  async function loadAll() {
+    const todayKey = keyOf(dayStartOf(new Date()));
+    // 从最近的一天往回补，先看到的先画
+    for (const day of st.days.slice().reverse()) {
+      if (day.data && day.key !== todayKey) continue;
+      if (day.data && day.key === todayKey && day.fresh) continue;
+      day.loading = true;
+      st.busy++; renderProg();
+      try {
+        const data = await fetchDay(day);
+        day.data = data;
+        day._g = null;
+        day.fresh = true;
+        writeCache(day.key, data);
+      } catch (e) {
+        $("err").textContent = e.message;
+      } finally {
+        day.loading = false;
+        st.busy--;
+      }
+      render();
+    }
+    renderProg();
+  }
+
+  function computeDays() {
+    const startP = p.get("start"), endP = p.get("end");
+    const s = startP ? new Date(startP) : new Date();
+    const e = endP ? new Date(endP) : new Date();
+    const spanH = (e - s) / 3.6e6;
+    let n, anchor;
+    if (spanH <= 25) {                 // period=day：拿这天 + 前 N-1 天做对比
+      anchor = dayStartOf(s);
+      n = st.ndays;
+      st.selKey = keyOf(anchor);
+    } else {                           // period=week/month：铺满整个区间
+      anchor = dayStartOf(new Date(e.getTime() - 1000));
+      n = clamp(Math.round(spanH / 24), 1, 31);
+      st.selKey = null;
+    }
+    const today = dayStartOf(new Date());
+    if (anchor > today) anchor = today;
+
+    const old = {};
+    st.days.forEach((d) => { old[d.key] = d; });
+    st.days = [];
+    for (let i = n - 1; i >= 0; i--) {
+      const start = addDays(anchor, -i);
+      const key = keyOf(start);
+      const prev = old[key];
+      const day = prev || { key: key, start: start, data: null, loading: false, fresh: false };
+      if (!day.data) {
+        const c = readCache(key);
+        if (c) { day.data = { cat: c.cat, app: c.app, cells: c.cells }; day._g = null; }
+      }
+      st.days.push(day);
+    }
+  }
+
+  /* ---------- 画 ---------- */
+
+  // 缓存里存的永远是 5min 格；显示粒度变了只是重新并格，不用重查
+  function groupsOf(day) {
+    if (!day.data) return [];
+    if (day._g && day._gb === st.dbin) return day._g;
+    const g = st.dbin / BIN, map = {}, out = [];
+    for (const [i, f, w, pairs, pi] of day.data.cells) {
+      const k = Math.floor(i / g);
+      let o = map[k];
+      if (!o) { o = map[k] = { k: k, a: 0, f: 0, w: 0, c: {}, p: {} }; out.push(o); }
+      o.f += f; o.w += w;
+      let cellAct = 0;
+      for (let j = 0; j < pairs.length; j += 2) {
+        const cn = day.data.cat[pairs[j]], sec = pairs[j + 1];
+        o.c[cn] = (o.c[cn] || 0) + sec;
+        o.a += sec; cellAct += sec;
+      }
+      // 应用只存了每格的主应用，按该格活跃时长加权，够 tooltip 用
+      if (pi >= 0 && cellAct > 0) {
+        const an = day.data.app[pi]; if (an) o.p[an] = (o.p[an] || 0) + cellAct;
+      }
+    }
+    out.forEach((o) => { o.app = argmax(o.p); });
+    out.sort((x, y) => x.k - y.k);
+    day._g = out; day._gb = st.dbin;
+    return out;
+  }
+
+  function fillFor(name) {
+    if (name === OTHER) return "var(--other)";
+    if (name === IDLE) return "var(--afk)";
+    return colorOf(name);
+  }
+
+  // 堆叠顺序：score 高的在底下。这样一行横着扫过去，贴底那条蓝带的厚度
+  // 就是「出活强度随时间的变化」，不用去读每一段。
+  function scoreOf(top) {
+    const d = CLS[top];
+    return d && typeof d.score === "number" ? d.score : 0;
+  }
+  const isProd = (top) => scoreOf(top) > 0;
+  const isDistr = (top) => scoreOf(top) < 0;
+  const isKey = (top) => scoreOf(top) !== 0;
+
+  function rankOf(name) {
+    if (name === IDLE) return 1e6;
+    if (name === OTHER) return 0;
+    if (name in rankMemo) return rankMemo[name];
+    return (rankMemo[name] = -scoreOf(name));
+  }
+
+  // 一格 → 自底向上的分段。不做 argmax：混合的格子就该画成混合的。
+  function segsOf(o) {
+    const acc = {};
+    for (const k in o.c) {
+      const top = topOf(k);
+      const name = st.mode === "key" && !isKey(top) ? OTHER : top;
+      acc[name] = (acc[name] || 0) + o.c[k];
+    }
+    const segs = Object.keys(acc).map((name) => ({ name: name, sec: acc[name] }));
+    segs.sort((a, b) => rankOf(a.name) - rankOf(b.name));
+    if (o.f > 0) segs.push({ name: IDLE, sec: o.f });
+    return segs;
+  }
+
+  function rowSvg(day) {
+    if (!day.data) return "";
+    const W = st.dbin, GSEC = W * 60;
+    let out = "";
+    for (const o of groupsOf(day)) {
+      const x = o.k * W;
+      const tot = o.a + o.f;
+      if (tot <= 0) {
+        // 只有长时间没输入：画一条底线，明确「机器开着但人不在」
+        if (o.w > 0) out += '<rect x="' + x + '" y="' + (H - 3) + '" width="' + W + '" height="3" fill="var(--away)"/>';
+        continue;
+      }
+      // 总高 = 在机占比。太矮的整体放大到 MIN_STACK，段与段的比例不变
+      const scale = (Math.max(tot / GSEC, MIN_STACK) / (tot / GSEC)) * (H / GSEC);
+      let y = H;
+      for (const seg of segsOf(o)) {
+        const h = seg.sec * scale;
+        if (h <= 0.01) continue;
+        y -= h;
+        out += '<rect x="' + x + '" y="' + y + '" width="' + W + '" height="' + h + '" fill="' + fillFor(seg.name) + '"/>';
+      }
+    }
+    // 今天画一根「此刻」的竖线
+    if (day.key === keyOf(dayStartOf(new Date()))) {
+      const m = minOfDay(Date.now());
+      out += '<rect x="' + (m - 1) + '" y="0" width="2" height="' + H + '" fill="var(--text)" opacity=".35"/>';
+    }
+    return '<svg viewBox="0 0 1440 ' + H + '" preserveAspectRatio="none">' + out + "</svg>";
+  }
+
+  function dayTotals(day) {
+    const t = { act: 0, afk: 0, away: 0, prod: 0, distr: 0 };
+    if (!day.data) return t;
+    for (const [, f, w, pairs] of day.data.cells) {
+      t.afk += f; t.away += w;
+      for (let j = 0; j < pairs.length; j += 2) {
+        const top = topOf(day.data.cat[pairs[j]] || ""), sec = pairs[j + 1];
+        t.act += sec;
+        if (isProd(top)) t.prod += sec;
+        if (isDistr(top)) t.distr += sec;
+      }
+    }
+    return t;
+  }
+
+  function renderAxis() {
+    const box = $("axis").querySelector(".ticks");
+    // 量 .track：它和 .ticks 在同一个网格列，但首帧时 .ticks 可能还没拿到宽度
+    const track = document.querySelector(".r .track");
+    const w = (track && track.clientWidth) || box.clientWidth || 0;
+    // 刻度线本身永远是 1h 一根（CSS 画的）；标签放不下就退到 2h / 3h
+    const per = (w || 800) / 24;
+    const step = per >= 24 ? 1 : per >= 15 ? 2 : 3;
+    let out = "";
+    for (let h = 0; h <= 24; h += step) {
+      const hh = (st.dayH + h) % 24;
+      const pos = h === 0 ? "left:0;transform:none"
+        : h >= 24 ? "right:0;left:auto;transform:none"
+        : "left:" + ((h / 24) * 100) + "%";
+      out += '<span style="' + pos + '">' + String(hh).padStart(2, "0") + "</span>";
+    }
+    box.innerHTML = out;
+  }
+
+  // AW 的深色主题是运行时往页面里插 dark.css，跟着父窗口走
+  function applyTheme() {
+    const forced = p.get("theme");
+    if (forced === "light" || forced === "dark") {
+      document.documentElement.setAttribute("data-theme", forced);
+      return;
+    }
+    let dark;
+    try {
+      dark = parent !== window
+        ? !!parent.document.querySelector('link[href*="dark.css"]')
+        : matchMedia("(prefers-color-scheme: dark)").matches;
+    } catch (e) {
+      dark = matchMedia("(prefers-color-scheme: dark)").matches;
+    }
+    document.documentElement.setAttribute("data-theme", dark ? "dark" : "light");
+  }
+
+  function render() {
+    applyTheme();
+    // 天数多就压扁行高，否则 30 天要一千多像素；天数少就放高，薄片才看得清
+    const n = st.days.length;
+    document.documentElement.style.setProperty("--rowh", (n <= 7 ? 28 : n <= 14 ? 20 : 14) + "px");
+    renderAxis();
+    let out = "";
+    for (const day of st.days) {
+      const t = dayTotals(day);
+      const cls = "r" + (day.key === st.selKey ? " sel" : "") + (day.loading && !day.data ? " load" : "");
+      out += '<div class="' + cls + '" data-key="' + day.key + '">' +
+        '<div class="lbl" title="打开这天"><b>' + day.key.slice(5) + "</b> " + WD[day.start.getDay()] + "</div>" +
+        '<div class="track">' + rowSvg(day) + "</div>" +
+        '<div class="tot">' + (day.data ? (t.act ? fmt(t.act) : "—") : "") + "</div></div>";
+    }
+    $("rows").innerHTML = out;
+    renderLegend();
+    renderNote();
+    reportHeight();
+  }
+
+  function renderProg() {
+    const left = st.days.filter((d) => !d.data).length;
+    $("prog").textContent = st.busy ? "载入中… 还剩 " + Math.max(left, 1) + " 天" : "";
+  }
+
+  function renderLegend() {
+    const seen = {};
+    st.days.forEach((d) => {
+      if (!d.data) return;
+      for (const [, , , pairs] of d.data.cells) {
+        for (let j = 0; j < pairs.length; j += 2) {
+          const top = topOf(d.data.cat[pairs[j]]);
+          seen[top] = (seen[top] || 0) + pairs[j + 1];
+        }
+      }
+    });
+    let tops = Object.keys(seen).sort((x, y) => rankOf(x) - rankOf(y));
+    if (st.mode === "key") tops = tops.filter(isKey);
+    let out = '<span style="color:var(--text)">自底向上：</span>' + tops.slice(0, 7).map(
+      (t) => '<span><i style="background:' + colorOf(t) + '"></i>' + esc(t) + "</span>").join("");
+    if (st.mode === "key") out += '<span><i style="background:var(--other)"></i>其它（沟通/中性/未分类）</span>';
+    out += '<span><i style="background:var(--afk)"></i>在桌前没动</span>';
+    out += '<span><i style="background:var(--away)"></i>20min+ 没输入</span>';
+    out += '<span><i style="background:var(--track)"></i>没开机</span>';
+    $("legend").innerHTML = out;
+  }
+
+  // 逐「时」聚合，找最稳的和最空的时段
+  function hourStats() {
+    const hrs = [];
+    for (let h = 0; h < 24; h++) hrs.push({ prod: 0, on: 0, days: 0 });
+    let n = 0;
+    for (const day of st.days) {
+      if (!day.data) continue;
+      n++;
+      const seen = {};
+      for (const [i, f, , pairs] of day.data.cells) {
+        const h = Math.floor((i * BIN) / 60);
+        let a = 0;
+        for (let j = 0; j < pairs.length; j += 2) {
+          const sec = pairs[j + 1];
+          a += sec;
+          if (isProd(topOf(day.data.cat[pairs[j]]))) hrs[h].prod += sec;
+        }
+        hrs[h].on += a + f;
+        if (a + f > 0) seen[h] = 1;   // 长时间没输入不算「醒着」，否则整夜开机会把凌晨算进来
+      }
+      Object.keys(seen).forEach((h) => hrs[h].days++);
+    }
+    return { hrs: hrs, n: n };
+  }
+
+  function label(h) { return String((st.dayH + h) % 24).padStart(2, "0") + ":00"; }
+
+  function clockOf(min) {
+    const abs = Math.round(st.dayH * 60 + st.dayM + min) % 1440;
+    return String(Math.floor(abs / 60)).padStart(2, "0") + ":" + String(Math.round(abs % 60)).padStart(2, "0");
+  }
+
+  // 每天第一次「站住脚」的时间：往后 30min 里至少攒够 15min 产出，
+  // 不然凌晨一个 5min 的闪现就能把起步时间拉到 05:00
+  function startTimes() {
+    const NEED = 900, WIN = 30 / BIN;
+    const out = [];
+    for (const day of st.days) {
+      if (!day.data) continue;
+      const prod = new Array(NBIN).fill(0);
+      for (const [i, , , pairs] of day.data.cells) {
+        for (let j = 0; j < pairs.length; j += 2) {
+          if (isProd(topOf(day.data.cat[pairs[j]]))) prod[i] += pairs[j + 1];
+        }
+      }
+      let run = 0;
+      for (let i = 0; i < NBIN; i++) {
+        run += prod[i];
+        if (i >= WIN) run -= prod[i - WIN];
+        if (run >= NEED) { out.push((i - WIN + 1) * BIN); break; }
+      }
+    }
+    return out.sort((a, b) => a - b);
+  }
+
+  function renderNote() {
+    const days = st.days.filter((d) => d.data);
+    if (!days.length) { $("note").innerHTML = ""; return; }
+    const tot = days.reduce((s, d) => {
+      const t = dayTotals(d);
+      return { act: s.act + t.act, afk: s.afk + t.afk, prod: s.prod + t.prod, distr: s.distr + t.distr };
+    }, { act: 0, afk: 0, prod: 0, distr: 0 });
+    const n = days.length;
+    const ratio = tot.act ? Math.round((tot.prod / tot.act) * 100) : 0;
+
+    if (!st.hasScores) {
+      $("note").innerHTML = '<div class="hd">最近 ' + n + " 天 · 日均活跃 " + fmt(tot.act / n) + "</div>" +
+        '<div>还没给分类设 score，所以「产出 / 摸鱼 / 起步」算不出来。' +
+        '去 Settings → Categorization，给顶级分类填个分数（正=产出，负=干扰），这张图才会按倾向着色。</div>';
+      return;
+    }
+    let html = '<div class="hd">最近 ' + n + " 天 · 日均活跃 " + fmt(tot.act / n) +
+      " · 产出 " + fmt(tot.prod / n) + "（" + ratio + "%）· 摸鱼 " + fmt(tot.distr / n) + "</div>";
+
+    const { hrs } = hourStats();
+    // 「醒着」的范围：至少一半天数在这个小时有记录
+    const awake = [];
+    for (let h = 0; h < 24; h++) if (hrs[h].days >= Math.max(1, n / 2)) awake.push(h);
+    if (awake.length >= 4) {
+      const lo = awake[0], hi = awake[awake.length - 1];
+      const W = 3;
+      let best = null, worst = null;
+      for (let h = lo; h + W - 1 <= hi; h++) {
+        let prod = 0, on2 = 0;
+        for (let k = 0; k < W; k++) { prod += hrs[h + k].prod; on2 += hrs[h + k].on; }
+        const rec = { h: h, prod: prod / n, on: on2 / n };
+        if (!best || rec.prod > best.prod) best = rec;
+        if (!worst || rec.prod < worst.prod) worst = rec;
+      }
+      if (best) html += '<div><span class="ok">最稳</span> ' + label(best.h) + "–" + label(best.h + W) +
+        " · 日均产出 " + fmt(best.prod) + " / " + W + "h</div>";
+      // 「最空」只认真正能拿回来的：人已经在机器前，但没出活。
+      // 不加这条的话，凌晨那几个小时永远是冠军 —— 那是睡觉，不是浪费。
+      if (worst && worst.h !== best.h && worst.on >= 1800) {
+        html += '<div><span class="bad">最空</span> ' + label(worst.h) + "–" + label(worst.h + W) +
+          " · 在机 " + fmt(worst.on) + " 却只出活 " + fmt(worst.prod) + "</div>";
+      }
+    }
+    const starts = startTimes();
+    if (starts.length >= 3) {
+      const mid = starts[Math.floor(starts.length / 2)];
+      html += '<div><span class="bad">起步</span> 中位 ' + clockOf(mid) + " 才开始出活（最早 " +
+        clockOf(starts[0]) + " · 最晚 " + clockOf(starts[starts.length - 1]) + "，" +
+        starts.length + "/" + n + " 天有产出）</div>";
+    }
+    $("note").innerHTML = html;
+  }
+
+  /* ---------- 交互 ---------- */
+
+  function tipFor(day, i) {
+    if (!day.data) return null;
+    const o = groupsOf(day).find((g) => g.k === i);
+    const t = (m) => { const abs = (st.dayH * 60 + st.dayM + m) % 1440;
+      return String(Math.floor(abs / 60)).padStart(2, "0") + ":" + String(abs % 60).padStart(2, "0"); };
+    const span = day.key + " " + t(i * st.dbin) + "–" + t((i + 1) * st.dbin);
+    if (!o) return span + " · 没开机";
+    const lines = [span];
+    // 完整构成，不做 argmax —— 图上薄片读不准的，这里读得准
+    const detail = Object.keys(o.c).sort((a, b) => o.c[b] - o.c[a]).slice(0, 4)
+      .map((k) => esc(k) + " " + fmt(o.c[k]));
+    if (detail.length) lines.push(detail.join(" · "));
+    const tail = [];
+    if (o.app) tail.push("主要应用 " + esc(o.app));
+    if (o.f > 0) tail.push("没动 " + fmt(o.f));
+    if (o.w > 0 && o.a === 0 && o.f === 0) tail.push("人不在");
+    if (tail.length) lines.push(tail.join(" · "));
+    return lines.join("<br>");
+  }
+
+  function bindRows() {
+    const rows = $("rows"), tip = $("tip");
+    rows.addEventListener("mousemove", (ev) => {
+      const track = ev.target.closest(".track");
+      if (!track) { tip.style.display = "none"; return; }
+      const row = track.closest(".r");
+      const day = st.days.find((d) => d.key === row.dataset.key);
+      const rect = track.getBoundingClientRect();
+      const ng = 1440 / st.dbin;
+      const i = clamp(Math.floor(((ev.clientX - rect.left) / rect.width) * ng), 0, ng - 1);
+      const txt = tipFor(day, i);
+      if (!txt) { tip.style.display = "none"; return; }
+      tip.innerHTML = txt;
+      tip.style.display = "block";
+      const w = tip.offsetWidth, th = tip.offsetHeight;
+      tip.style.left = clamp(ev.clientX + 12, 4, window.innerWidth - w - 4) + "px";
+      // 最后一行的浮层放下面会顶出 iframe 底边被裁掉，放不下就翻到上面
+      let top = rect.bottom + 6;
+      if (top + th > window.innerHeight - 2) top = rect.top - th - 6;
+      tip.style.top = Math.max(2, top) + "px";
+    });
+    rows.addEventListener("mouseleave", () => { tip.style.display = "none"; });
+    rows.addEventListener("click", (ev) => {
+      const lbl = ev.target.closest(".lbl");
+      if (!lbl) return;
+      gotoDay(lbl.closest(".r").dataset.key);
+    });
+  }
+
+  // 点日期 → 父窗口跳到那天的 Overview（同源，直接改 hash）
+  function gotoDay(key) {
+    try {
+      const m = /^#\/activity\/([^/]+)\/(?:([^/]+)\/)?(?:([\d-]+)\/)?view\/?([^/?]*)/.exec(parent.location.hash || "");
+      const host = (m && m[1]) || st.host;
+      const view = (m && m[4]) || "";
+      parent.location.hash = "#/activity/" + host + "/day/" + key + "/view/" + view;
+    } catch (e) { /* 跨域/没父窗口就算了 */ }
+  }
+
+  let lastH = 0;
+  // 报少一点父窗口就会给 iframe 留出滚动条，所以往大里取：
+  // getBoundingClientRect 拿不到溢出部分，scrollHeight 可以
+  function reportHeight() {
+    try {
+      const root = $("root");
+      // 只量 #root 自己。documentElement.scrollHeight 有个「不低于视口高」的下限，
+      // 拿它当高度会棘轮式越报越高，卡片下面留出一大块空白
+      const h = Math.ceil(Math.max(root.getBoundingClientRect().height, root.scrollHeight)) + 10;
+      if (Math.abs(h - lastH) < 2) return;
+      lastH = h;
+      parent.postMessage({ type: "aw-rollup-height", height: h, title: p.get("title") || "时间带" }, location.origin);
+    } catch (e) {}
+  }
+
+  /* ---------- 启动 ---------- */
+
+  async function main() {
+    const nd = $("ndays"), db = $("dbin"), md = $("mode");
+    const pref = (k, d) => { try { return localStorage.getItem("dayline_" + k) || d; } catch (e) { return d; } };
+    const save = (k, v) => { try { localStorage.setItem("dayline_" + k, v); } catch (e) {} };
+    st.ndays = parseInt(pref("ndays", "7"), 10);
+    st.dbin = parseInt(pref("dbin", "15"), 10);
+    st.mode = pref("mode", "key");
+    nd.value = String(st.ndays); db.value = String(st.dbin); md.value = st.mode;
+    nd.onchange = () => { st.ndays = parseInt(nd.value, 10); save("ndays", nd.value); computeDays(); render(); loadAll(); };
+    db.onchange = () => { st.dbin = parseInt(db.value, 10); save("dbin", db.value); render(); };
+    md.onchange = () => { st.mode = md.value; save("mode", md.value); render(); };
+
+    const info = await api("/info");
+    st.host = p.get("hostname") || info.hostname;
+    const settings = await api("/settings");
+    st.classes = settings.classes || [];
+    indexClasses();
+    const sod = (settings.startOfDay || "04:00").split(":");
+    st.dayH = parseInt(sod[0], 10) || 0;
+    st.dayM = parseInt(sod[1], 10) || 0;
+    // query2 的字符串字面量吃掉一层反斜杠，必须先还原，否则 \d \. 这类规则全失配
+    st.rules = JSON.stringify(
+      st.classes.filter((c) => c.rule && c.rule.type === "regex").map((c) => [c.name, c.rule])
+    ).replace(/\\\\/g, "\\");
+    let h = 0;
+    for (let i = 0; i < st.rules.length; i++) h = ((h << 5) - h + st.rules.charCodeAt(i)) | 0;
+    st.hash = String(h);
+
+    const buckets = await api("/buckets/");
+    st.chrome = Object.keys(buckets).find((b) => b.indexOf("aw-watcher-web-chrome_") === 0) || null;
+
+    computeDays();
+    bindRows();
+    render();
+    await loadAll();
+  }
+
+  // 窗口变窄时标签步长要跟着退档，所以 resize 要重画刻度，不只是报高度
+  window.addEventListener("resize", function () { renderAxis(); reportHeight(); });
+  // 字体加载完、控件换行、图例多一行都会改高度 —— 光靠几个 setTimeout 补不全
+  try { new ResizeObserver(reportHeight).observe(document.getElementById("root")); } catch (e) {}
+  // 首帧 iframe 还是 CSS 默认宽度，量出来的列宽偏小会让刻度停在 3h 档，布局稳了要补测
+  [80, 400, 1200].forEach((ms) => setTimeout(function () { renderAxis(); reportHeight(); }, ms));
+  main().catch((e) => { $("err").textContent = e.message; reportHeight(); });
+</script>
