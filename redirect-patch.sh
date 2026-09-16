@@ -8,18 +8,25 @@
 # 注意：AW 升级会覆盖掉它，升级后重跑一次。macOS 上这会让 app 的代码签名失效
 # （实测照常启动；万一起不来，先 revert，再 codesign --force --deep --sign - /Applications/ActivityWatch.app）。
 set -euo pipefail
+# Windows 上 "$PYBIN" 通常叫 python
+PYBIN=$(command -v python3 || command -v python) || { echo "需要 python 3" >&2; exit 1; }
 cd "$(dirname "$0")"
 LINE='<script src="/pages/clean/redirect.js"></script>'
 
 find_index() {
   [ -n "${AW_STATIC:-}" ] && { echo "$AW_STATIC"; return; }
   local c
+  local win=""
+  command -v cygpath >/dev/null 2>&1 && win=$(cygpath -u "${LOCALAPPDATA:-}" 2>/dev/null || true)
   for c in \
     "/Applications/ActivityWatch.app/Contents/Resources/aw_server/static/index.html" \
-    "$HOME/Applications/ActivityWatch.app/Contents/Resources/aw_server/static/index.html"
-  do [ -f "$c" ] && { echo "$c"; return; }; done
+    "$HOME/Applications/ActivityWatch.app/Contents/Resources/aw_server/static/index.html" \
+    "${win:+$win/Programs/ActivityWatch/aw_server/static/index.html}" \
+    "/c/Program Files/ActivityWatch/aw_server/static/index.html" \
+    "/c/Program Files (x86)/ActivityWatch/aw_server/static/index.html"
+  do [ -n "$c" ] && [ -f "$c" ] && { echo "$c"; return; }; done
   # pip / 包管理器装的
-  c=$(python3 - <<'PY' 2>/dev/null || true
+  c=$("$PYBIN" - <<'PY' 2>/dev/null || true
 import pathlib
 try:
     import aw_server
@@ -41,7 +48,7 @@ case "${1:-}" in
   apply)
     [ -f backup/official-index.html.orig ] || cp "$DST" backup/official-index.html.orig
     if grep -q "pages/clean/redirect.js" "$DST"; then echo "已经打过了"; exit 0; fi
-    python3 - "$DST" "$LINE" <<'PY'
+    "$PYBIN" - "$DST" "$LINE" <<'PY'
 import pathlib, sys
 p, line = pathlib.Path(sys.argv[1]), sys.argv[2]
 s = p.read_text()
@@ -55,7 +62,7 @@ PY
     if [ -f backup/official-index.html.orig ]; then
       cp backup/official-index.html.orig "$DST"; echo "已从备份还原"
     else
-      python3 - "$DST" "$LINE" <<'PY'
+      "$PYBIN" - "$DST" "$LINE" <<'PY'
 import pathlib, sys
 p = pathlib.Path(sys.argv[1]); p.write_text(p.read_text().replace(sys.argv[2], ""))
 PY

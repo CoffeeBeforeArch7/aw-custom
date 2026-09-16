@@ -26,10 +26,13 @@
     afk: 'At Computer',
     window: 'App',
     input: 'Input',
-    'web-chrome': 'Website',
-    'web-firefox': 'Website',
-    'web-edge': 'Website',
   };
+  // 浏览器 watcher 有九种（chrome/firefox/edge/brave/vivaldi/arc/opera/yandex/orion），
+  // 逐个列没意义，一律叫 Website
+  function bucketLabel(kind) {
+    if (kind.indexOf('web-') === 0) return 'Website';
+    return BUCKET_LABELS[kind] || kind;
+  }
 
   // 时间轴色块里的英文状态词
   var ITEM_LABELS = { 'not-afk': 'Active', afk: 'Away' };
@@ -170,7 +173,7 @@
     if (CFG.shortBucketNames) {
       document.querySelectorAll('.vis-labelset .vis-inner').forEach(function (el) {
         var m = /^aw-watcher-([a-z0-9-]+)_/.exec(txt(el));
-        if (m) el.textContent = BUCKET_LABELS[m[1]] || m[1];
+        if (m) el.textContent = bucketLabel(m[1]);
       });
       // 色块里的 not-afk / afk 也换成人话
       document.querySelectorAll('.vis-item-content').forEach(function (el) {

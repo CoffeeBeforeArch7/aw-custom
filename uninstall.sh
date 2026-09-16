@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # 把 aw-custom 从本机撤干净，还原成装之前的样子。
 set -euo pipefail
+# Windows 上 "$PYBIN" 通常叫 python
+PYBIN=$(command -v python3 || command -v python) || { echo "需要 python 3" >&2; exit 1; }
 cd "$(dirname "$0")"
 AW=${AW_URL:-http://127.0.0.1:5600}
 
@@ -9,7 +11,7 @@ if [ -n "${AW_CONFIG_DIR:-}" ]; then CFG="$AW_CONFIG_DIR"; else
 case "$(uname -s)" in
   Darwin) CFG="$HOME/Library/Application Support/activitywatch/aw-server" ;;
   Linux)  CFG="${XDG_CONFIG_HOME:-$HOME/.config}/activitywatch/aw-server" ;;
-  MINGW*|MSYS*|CYGWIN*) CFG="$LOCALAPPDATA/activitywatch/aw-server" ;;
+  MINGW*|MSYS*|CYGWIN*) CFG="$(cygpath -u "$LOCALAPPDATA")/activitywatch/aw-server" ;;
   *) echo "认不出这个系统" >&2; exit 1 ;;
 esac
 fi
@@ -20,7 +22,7 @@ fi
 # 2. settings（views / landingpage）还原成装之前那份
 SNAP=$( [ -f .install-state ] && cat .install-state || ls -1t backup/settings-*.json 2>/dev/null | tail -1 )
 if [ -n "${SNAP:-}" ] && [ -f "$SNAP" ]; then
-  python3 - "$SNAP" "$AW" <<'PY'
+  "$PYBIN" - "$SNAP" "$AW" <<'PY'
 import json, sys, urllib.request
 snap, aw = json.load(open(sys.argv[1])), sys.argv[2]
 for key in ("views", "landingpage"):
@@ -39,7 +41,7 @@ fi
 if [ -f backup/aw-server.toml.bak ]; then
   cp backup/aw-server.toml.bak "$CFG/aw-server.toml"; echo "  aw-server.toml 已还原"
 else
-  python3 - "$CFG/aw-server.toml" <<'PY'
+  "$PYBIN" - "$CFG/aw-server.toml" <<'PY'
 import pathlib, re, sys
 p = pathlib.Path(sys.argv[1])
 if p.exists():

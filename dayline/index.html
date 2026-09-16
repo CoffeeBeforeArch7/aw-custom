@@ -140,8 +140,20 @@
   // Settings → Categorization 里给顶级分类设的分数，>0 算产出，<0 算干扰，0 或没设算中性。
   // 这样换一台机器、换一套分类体系都不用改代码。
   const AWAY_SEC = 20 * 60;      // 连续没输入超过这个时长，当成「人不在」而不是「桌前发呆」
-  const CHROME_APPS = ["Google Chrome","Google-chrome","chrome.exe","google-chrome-stable","Chromium",
-    "Chromium-browser","Chromium-browser-chromium","chromium.exe","Google-chrome-beta","Google-chrome-unstable"];
+  // 各浏览器的窗口标题里 app 叫什么（抄自 aw-webui 的 browser_appnames）。
+  // Windows 上多数人用 Edge，只认 chrome 会让「有声标签页算活跃」这条规则失效，
+  // 跟官方 Overview 的口径对不上。
+  const BROWSER_APPS = {
+    chrome: ["Google Chrome", "Google-chrome", "chrome.exe", "google-chrome-stable", "Chromium", "Chromium-browser", "Chromium-browser-chromium", "chromium.exe", "Google-chrome-beta", "Google-chrome-unstable"],
+    firefox: ["Firefox", "Firefox.exe", "firefox", "firefox.exe", "Firefox Developer Edition", "firefoxdeveloperedition", "Firefox-esr", "Firefox Beta", "Nightly", "firefox-aurora", "firefox-trunk-dev", "LibreWolf-Portable.exe", "LibreWolf", "LibreWolf.exe", "Librewolf", "Librewolf.exe", "librewolf", "librewolf.exe", "librewolf-default", "Waterfox", "Waterfox.exe", "waterfox", "waterfox.exe"],
+    opera: ["opera.exe", "Opera"],
+    brave: ["Brave-browser", "Brave Browser", "brave.exe"],
+    edge: ["msedge.exe", "Microsoft Edge", "Microsoft Edge Beta", "Microsoft-Edge-Stable", "Microsoft-edge", "microsoft-edge", "microsoft-edge-beta", "microsoft-edge-dev"],
+    arc: ["Arc.exe", "Arc"],
+    vivaldi: ["Vivaldi-stable", "Vivaldi-snapshot", "vivaldi.exe", "Vivaldi"],
+    orion: ["Orion"],
+    yandex: ["Yandex"],
+  };
   const WD = ["日", "一", "二", "三", "四", "五", "六"];
 
   const p = new URLSearchParams(location.search);
@@ -151,7 +163,7 @@
   const MIN_STACK = 0.12;   // 整根柱子的最小可见高度（比例照旧，只是整体放大）
 
   const st = {
-    host: null, classes: [], rules: "", hash: "", chrome: null,
+    host: null, classes: [], rules: "", hash: "", browsers: [],
     dayH: 4, dayM: 0, days: [], ndays: 7, dbin: 15, mode: "key", selKey: null, busy: 0,
   };
 
@@ -225,21 +237,23 @@
 
   // 和 rollup / Overview 用同一条 canonical query，口径必须一致
   function queryBody() {
-    const chrome = st.chrome ? [
-      'browser_events = [];',
-      'events_chrome = flood(query_bucket("' + st.chrome + '"));',
-      'window_chrome = filter_keyvals(events, "app", ' + JSON.stringify(CHROME_APPS) + ');',
-      'events_chrome = filter_period_intersect(events_chrome, window_chrome);',
-      'events_chrome = split_url_events(events_chrome);',
-      'browser_events = concat(browser_events, events_chrome);',
-      'audible_events = filter_keyvals(browser_events, "audible", [true]);',
-      'not_afk = period_union(not_afk, audible_events);',
-    ] : [];
+    const browser = st.browsers.length ? ["browser_events = [];"].concat(
+      st.browsers.map((b) => [
+        'be = flood(query_bucket("' + b.bucket + '"));',
+        'bw = filter_keyvals(events, "app", ' + JSON.stringify(BROWSER_APPS[b.name]) + ');',
+        'be = filter_period_intersect(be, bw);',
+        'be = split_url_events(be);',
+        'browser_events = concat(browser_events, be);',
+      ].join("\n")),
+      [
+        'audible_events = filter_keyvals(browser_events, "audible", [true]);',
+        'not_afk = period_union(not_afk, audible_events);',
+      ]) : [];
     return [
       'events = flood(query_bucket(find_bucket("aw-watcher-window_' + st.host + '")));',
       'afk_all = flood(query_bucket(find_bucket("aw-watcher-afk_' + st.host + '")));',
       'not_afk = filter_keyvals(afk_all, "status", ["not-afk"]);',
-    ].concat(chrome, [
+    ].concat(browser, [
       'events = filter_period_intersect(events, not_afk);',
       'events = categorize(events, ' + st.rules + ');',
       'away = filter_keyvals(afk_all, "status", ["afk"]);',
@@ -818,8 +832,11 @@
     for (let i = 0; i < st.rules.length; i++) h = ((h << 5) - h + st.rules.charCodeAt(i)) | 0;
     st.hash = String(h);
 
-    const buckets = await api("/buckets/");
-    st.chrome = Object.keys(buckets).find((b) => b.indexOf("aw-watcher-web-chrome_") === 0) || null;
+    // 有哪些浏览器 watcher 在跑，动态认，别写死 chrome
+    const buckets = Object.keys(await api("/buckets/"));
+    st.browsers = Object.keys(BROWSER_APPS)
+      .map((name) => ({ name: name, bucket: buckets.find((b) => b.indexOf("aw-watcher-web-" + name + "_") === 0) }))
+      .filter((b) => b.bucket);
 
     computeDays();
     bindRows();

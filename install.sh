@@ -7,6 +7,8 @@
 #
 # 装之前会先把当前 settings 和 aw-server.toml 备份到 backup/，uninstall.sh 可还原。
 set -euo pipefail
+# Windows 上 "$PYBIN" 通常叫 python
+PYBIN=$(command -v python3 || command -v python) || { echo "需要 python 3" >&2; exit 1; }
 cd "$(dirname "$0")"
 REPO="$(pwd -P)"
 AW=${AW_URL:-http://127.0.0.1:5600}
@@ -22,13 +24,20 @@ done
 
 say() { printf '  %s\n' "$*"; }
 
+# Git Bash 里 pwd 给的是 /c/Users/…，但 aw-server 是 Windows 原生进程，要 C:/Users/…。
+# 用 cygpath -m 拿「正斜杠的 Windows 路径」：反斜杠形式在 TOML basic string 里会被
+# 当成转义（C:\Users 的 \U 直接是非法转义），正斜杠 Windows 一样认。
+to_native() {
+  if command -v cygpath >/dev/null 2>&1; then cygpath -m "$1"; else printf '%s' "$1"; fi
+}
+
 # ---------- 1. 找 aw-server 的配置目录 ----------
 # 测试 / 非标准安装位置可以用 AW_CONFIG_DIR 覆盖
 if [ -n "${AW_CONFIG_DIR:-}" ]; then CFG="$AW_CONFIG_DIR"; else
 case "$(uname -s)" in
   Darwin) CFG="$HOME/Library/Application Support/activitywatch/aw-server" ;;
   Linux)  CFG="${XDG_CONFIG_HOME:-$HOME/.config}/activitywatch/aw-server" ;;
-  MINGW*|MSYS*|CYGWIN*) CFG="$LOCALAPPDATA/activitywatch/aw-server" ;;
+  MINGW*|MSYS*|CYGWIN*) CFG="$(cygpath -u "$LOCALAPPDATA")/activitywatch/aw-server" ;;
   *) echo "认不出这个系统，请手动配置 custom_static" >&2; exit 1 ;;
 esac
 fi
@@ -49,7 +58,7 @@ else
 fi
 
 # ---------- 3. 写 custom_static ----------
-python3 - "$TOML" "$REPO" <<'PY'
+"$PYBIN" - "$TOML" "$(to_native "$REPO")" <<'PY'
 import pathlib, re, sys
 toml, repo = pathlib.Path(sys.argv[1]), sys.argv[2]
 s = toml.read_text() if toml.exists() else ""
@@ -109,7 +118,7 @@ if [ "$DO_VIEWS" = 1 ]; then
        -d @views-lean.json >/dev/null
   say "已换上精简 views（Overview / Web）。想保留原布局下次加 --no-views，还原用 ./uninstall.sh"
 fi
-HOSTNAME_AW=$(curl -fsS "$AW/api/0/info" | python3 -c 'import json,sys;print(json.load(sys.stdin)["hostname"])')
+HOSTNAME_AW=$(curl -fsS "$AW/api/0/info" | "$PYBIN" -c 'import json,sys;print(json.load(sys.stdin)["hostname"])')
 curl -fsS -X POST "$AW/api/0/settings/landingpage" -H 'Content-Type: application/json' \
      -d "\"/activity/$HOSTNAME_AW/view/\"" >/dev/null
 say "落地页 -> /activity/$HOSTNAME_AW/view/"

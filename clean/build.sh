@@ -5,13 +5,15 @@
 # 而安装路径每个平台都不一样（macOS 在 .app 里，Linux 在 site-packages，Windows 在 AppData）。
 # 从 server 抓永远对得上当前正在跑的那个版本，且跨平台。
 set -euo pipefail
+# Windows 上 "$PYBIN" 通常叫 python
+PYBIN=$(command -v python3 || command -v python) || { echo "需要 python 3" >&2; exit 1; }
 cd "$(dirname "$0")"
 AW=${AW_URL:-http://127.0.0.1:5600}
 
 curl -fsS "$AW/index.html" -o .official.html || {
   echo "抓不到 $AW/index.html —— aw-server 没在跑？" >&2; exit 1; }
 
-python3 - <<'PY'
+"$PYBIN" - <<'PY'
 import pathlib
 src = pathlib.Path(".official.html").read_text()
 assert "</head>" in src, "抓回来的不像 index.html"

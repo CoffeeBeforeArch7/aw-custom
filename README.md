@@ -20,6 +20,9 @@
 | `/api/0/settings` | views 布局、分类规则、落地页 |
 | `/api/0/query/` | 和官方 Overview 完全同一条 canonical query |
 
+浏览器 watcher 是**动态认**的：chrome / firefox / edge / brave / vivaldi / arc / opera / yandex / orion
+都能识别（app 名单抄自 aw-webui 的 `browser_appnames`），所以 Windows 上用 Edge 也和官方 Overview 口径一致。
+
 `clean/index.html` 是**复制**官方 `index.html`、加载同一份官方 Vue bundle（绝对路径 `/js/*`，同源），
 只额外注入自己的 CSS/JS。所以官方界面原样保留在 `/`，随时对照。
 
@@ -30,7 +33,18 @@ query2 吃反斜杠），这些不是公开契约，官方改了就会碎。见�
 
 ## 装
 
-需要：ActivityWatch 已安装并至少跑过一次、`python3`、`curl`。
+需要：ActivityWatch 已安装并至少跑过一次、Python 3、`curl`、一个 bash。
+浏览器需要 Chrome 105+ / Firefox 121+ / Safari 15.4+（用到了 CSS `:has()` 和 `ResizeObserver`）。
+
+| 平台 | 怎么跑 |
+|---|---|
+| macOS | 直接 `./install.sh`，会自动重启 ActivityWatch |
+| Linux | `./install.sh`，脚本会让你手动重启 aw-server 后按回车 |
+| Windows | 用 **Git Bash** 跑 `bash install.sh`（不是 PowerShell）。同样会让你手动重启 |
+
+Windows 上还有两处会自动处理：`python3` 一般叫 `python`，脚本自己探测；
+Git Bash 的 `/c/Users/…` 路径会用 `cygpath -m` 转成 `C:/Users/…` 再写进 TOML
+（aw-server 是原生进程，而且 `C:\Users` 里的 `\U` 在 TOML basic string 里是非法转义）。
 
 ```sh
 git clone <this repo> aw-custom && cd aw-custom
